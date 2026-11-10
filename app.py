@@ -23,7 +23,7 @@ def home():
   con.commit()
   return redirect('/')
  rows=con.execute('SELECT id,platform,caption,link,scheduled_at,status FROM posts ORDER BY id DESC').fetchall()
- return render_template_string('''<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>T2 Music</title><style>body{background:#10121b;color:#eee;font:16px Arial;max-width:850px;margin:40px auto;padding:20px}input,textarea,select,button{box-sizing:border-box;width:100%;margin:8px 0;padding:12px;border-radius:7px;border:0}button{background:#a4ffb0;cursor:pointer}article{padding:16px;background:#222634;margin:14px 0;border-radius:10px}small{color:#b9c2d0}</style></head><body><h1>🎵 T2 Music</h1><p><a href="/auth/meta/start" style="color:#a4ffb0">Connect Facebook & Instagram</a></p><p>Campaign planner · Drafts only. Publishing requires official platform authorization.</p><form method="post"><select name="platform">{% for p in platforms %}<option>{{p}}</option>{% endfor %}</select><textarea name="caption" rows="5" required placeholder="Write promotional caption"></textarea><input name="link" placeholder="Music or video link"><label>Planned publishing time (local)</label><input type="datetime-local" name="scheduled_at"><button>Save draft</button></form><h2>Campaign drafts</h2>{% for r in rows %}<article><b>{{r[1]|e}}</b> · <small>{{r[5]|e}} / {{r[4]|e}}</small><p>{{r[2]|e}}</p><small>{{r[3]|e}}</small></article>{% endfor %}</body></html>''',rows=rows,token=TOKEN,platforms=['facebook','instagram','tiktok','x','youtube'])
+ return render_template_string('''<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>T2 Music</title><style>body{background:#10121b;color:#eee;font:16px Arial;max-width:850px;margin:40px auto;padding:20px}input,textarea,select,button{box-sizing:border-box;width:100%;margin:8px 0;padding:12px;border-radius:7px;border:0}button{background:#a4ffb0;cursor:pointer}article{padding:16px;background:#222634;margin:14px 0;border-radius:10px}small{color:#b9c2d0}</style></head><body><h1>🎵 T2 Music</h1><p><a href="/auth/meta/start" style="color:#a4ffb0">Connect Facebook & Instagram</a></p><p>Campaign planner · Drafts only. Publishing requires official platform authorization.</p><form method="post"><select name="platform">{% for p in platforms %}<option>{{p}}</option>{% endfor %}</select><textarea name="caption" rows="5" required placeholder="Write promotional caption"></textarea><input name="link" placeholder="Music or video link"><label>Planned publishing time (local)</label><input type="datetime-local" name="scheduled_at"><button>Save draft</button></form><h2>Generate a music promotion</h2><form method="post" action="/campaign/generate"><input name="song" placeholder="Song title" required><input name="link" placeholder="Song or video link"><select name="platform">{% for p in platforms %}<option>{{p}}</option>{% endfor %}</select><button>Generate draft</button></form><h2>Campaign drafts</h2>{% for r in rows %}<article><b>{{r[1]|e}}</b> · <small>{{r[5]|e}} / {{r[4]|e}}</small><p>{{r[2]|e}}</p><small>{{r[3]|e}}</small></article>{% endfor %}</body></html>''',rows=rows,token=TOKEN,platforms=['facebook','instagram','tiktok','x','youtube'])
 if __name__=='__main__': app.run(host='0.0.0.0',port=int(os.environ.get('PORT',10000)))
 
 
@@ -83,3 +83,22 @@ def login():
 def logout():
  session.clear()
  return redirect('/login')
+
+@app.post('/campaign/generate')
+def generate_campaign():
+ if not authorized(): return redirect('/login')
+ platform=request.form.get('platform','instagram').lower()
+ if platform not in ('facebook','instagram','tiktok','x','youtube'): abort(400)
+ title=request.form.get('song','T2 Compton').strip()[:120] or 'T2 Compton'
+ link=request.form.get('link','').strip()[:1000]
+ captions={
+ 'facebook':f'Compton sound, independent energy. 🔥 Check out {title} by T2 Compton. Listen and share! #T2Compton #DirtyDPosse',
+ 'instagram':f'🎵 Now playing: {title} — T2 Compton. Tap in and share with someone who loves West Coast music. 🔥 #T2Compton #ComptonMusic #IndependentArtist',
+ 'tiktok':f'POV: You just found your new West Coast track 🔥 {title} by T2 Compton. #T2Compton #NewMusic #WestCoastHipHop',
+ 'x':f'🎵 {title} — T2 Compton. Independent music straight out of Compton. Listen and repost 🔥 #T2Compton',
+ 'youtube':f'Check out {title} by T2 Compton! Subscribe for more music from Dirty D Posse Entertainment. #T2Compton'
+ }
+ con=db()
+ con.execute('INSERT INTO posts(platform,caption,link,scheduled_at,status) VALUES(?,?,?,?,?)',(platform,captions[platform],link,'','draft'))
+ con.commit()
+ return redirect('/')
