@@ -1,11 +1,12 @@
-import os, sqlite3, secrets
-from flask import Flask, request, redirect, render_template_string, abort
+import os, sqlite3, secrets, csv, io, datetime
+from flask import Flask, request, redirect, render_template_string, abort, Response
 app=Flask(__name__)
 DB=os.environ.get('DB_PATH','/tmp/t2music.db')
 TOKEN=os.environ.get('ADMIN_TOKEN','')
 def db():
  c=sqlite3.connect(DB)
  c.execute('CREATE TABLE IF NOT EXISTS posts(id INTEGER PRIMARY KEY, platform TEXT, caption TEXT, link TEXT, scheduled_at TEXT, status TEXT DEFAULT "draft")')
+ c.execute('CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT)')
  return c
 def authorized():
  return bool(TOKEN) and session.get('admin') is True
@@ -17,13 +18,14 @@ def home():
  if not authorized(): return redirect('/login')
  con=db()
  if request.method=='POST':
+  if request.form.get('csrf')!=session.get('csrf'): abort(403)
   platform=request.form.get('platform','')
   if platform not in ('facebook','instagram','tiktok','x','youtube'): abort(400)
   con.execute('INSERT INTO posts(platform,caption,link,scheduled_at) VALUES(?,?,?,?)',(platform,request.form.get('caption','')[:3000],request.form.get('link','')[:1000],request.form.get('scheduled_at','')))
   con.commit()
   return redirect('/')
  rows=con.execute('SELECT id,platform,caption,link,scheduled_at,status FROM posts ORDER BY id DESC').fetchall()
- return render_template_string('''<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>T2 Music</title><style>body{background:#10121b;color:#eee;font:16px Arial;max-width:850px;margin:40px auto;padding:20px}input,textarea,select,button{box-sizing:border-box;width:100%;margin:8px 0;padding:12px;border-radius:7px;border:0}button{background:#a4ffb0;cursor:pointer}article{padding:16px;background:#222634;margin:14px 0;border-radius:10px}small{color:#b9c2d0}</style></head><body><h1>🎵 T2 Music</h1><p><a href="/auth/meta/start" style="color:#a4ffb0">Connect Facebook & Instagram</a></p><p>Campaign planner · Drafts only. Publishing requires official platform authorization.</p><form method="post"><select name="platform">{% for p in platforms %}<option>{{p}}</option>{% endfor %}</select><textarea name="caption" rows="5" required placeholder="Write promotional caption"></textarea><input name="link" placeholder="Music or video link"><label>Planned publishing time (local)</label><input type="datetime-local" name="scheduled_at"><button>Save draft</button></form><h2>Generate a music promotion</h2><form method="post" action="/campaign/generate"><input name="song" placeholder="Song title" required><input name="link" placeholder="Song or video link"><select name="platform">{% for p in platforms %}<option>{{p}}</option>{% endfor %}</select><button>Generate draft</button></form><h2>Campaign drafts</h2>{% for r in rows %}<article><b>{{r[1]|e}}</b> · <small>{{r[5]|e}} / {{r[4]|e}}</small><p>{{r[2]|e}}</p><small>{{r[3]|e}}</small></article>{% endfor %}</body></html>''',rows=rows,token=TOKEN,platforms=['facebook','instagram','tiktok','x','youtube'])
+ return render_template_string('''<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>T2 Music</title><style>body{background:#10121b;color:#eee;font:16px Arial;max-width:850px;margin:40px auto;padding:20px}input,textarea,select,button{box-sizing:border-box;width:100%;margin:8px 0;padding:12px;border-radius:7px;border:0}button{background:#a4ffb0;cursor:pointer}article{padding:16px;background:#222634;margin:14px 0;border-radius:10px}small{color:#b9c2d0}</style></head><body><h1>🎵 T2 Music</h1><p><a href="/auth/meta/start" style="color:#a4ffb0">Connect Facebook & Instagram</a></p><p>Campaign planner · Drafts only. Publishing requires official platform authorization.</p><form method="post"><input type="hidden" name="csrf" value="{{csrf}}"><select name="platform">{% for p in platforms %}<option>{{p}}</option>{% endfor %}</select><textarea name="caption" rows="5" required placeholder="Write promotional caption"></textarea><input name="link" placeholder="Music or video link"><label>Planned publishing time (local)</label><input type="datetime-local" name="scheduled_at"><button>Save draft</button></form><h2>Generate a music promotion</h2><form method="post" action="/campaign/generate"><input type="hidden" name="csrf" value="{{csrf}}"><input name="song" placeholder="Song title" required><input name="link" placeholder="Song or video link"><select name="platform">{% for p in platforms %}<option>{{p}}</option>{% endfor %}</select><button>Generate draft</button></form><p><a href="/campaign/export" style="color:#a4ffb0">Export all campaigns (CSV backup)</a> · <a href="/campaign/calendar" style="color:#a4ffb0">View schedule</a></p><h2>Campaign drafts</h2>{% for r in rows %}<article><b>{{r[1]|e}}</b> · <small>{{r[5]|e}} / {{r[4]|e}}</small><p>{{r[2]|e}}</p><small>{{r[3]|e}}</small><form method="post" action="/campaign/{{r[0]}}/delete" onsubmit="return confirm(\'Delete draft?\')"><input type="hidden" name="csrf" value="{{csrf}}"><button>Delete</button></form></article>{% endfor %}</body></html>''',rows=rows,csrf=session.get('csrf',''),token=TOKEN,platforms=['facebook','instagram','tiktok','x','youtube'])
 if __name__=='__main__': app.run(host='0.0.0.0',port=int(os.environ.get('PORT',10000)))
 
 
@@ -76,6 +78,7 @@ def login():
   if secrets.compare_digest(submitted,TOKEN):
    session.clear()
    session['admin']=True
+   session['csrf']=secrets.token_urlsafe(24)
    return redirect('/')
   return 'Incorrect admin access token.',401
  return render_template_string("""<!doctype html><title>T2 Music Login</title><meta name="viewport" content="width=device-width,initial-scale=1"><body style="font:18px Arial;max-width:450px;margin:80px auto;padding:20px"><h1>T2 Music</h1><p>Enter your administrator access token from Render's ADMIN_TOKEN environment variable.</p><form method="post"><input type="password" name="password" required style="padding:12px;width:95%"><button style="padding:12px;margin-top:12px">Sign in</button></form></body>""")
@@ -87,6 +90,7 @@ def logout():
 @app.post('/campaign/generate')
 def generate_campaign():
  if not authorized(): return redirect('/login')
+ if request.form.get('csrf')!=session.get('csrf'): abort(403)
  platform=request.form.get('platform','instagram').lower()
  if platform not in ('facebook','instagram','tiktok','x','youtube'): abort(400)
  title=request.form.get('song','T2 Compton').strip()[:120] or 'T2 Compton'
@@ -100,5 +104,39 @@ def generate_campaign():
  }
  con=db()
  con.execute('INSERT INTO posts(platform,caption,link,scheduled_at,status) VALUES(?,?,?,?,?)',(platform,captions[platform],link,'','draft'))
+ con.commit()
+ return redirect('/')
+
+@app.get('/campaign/export')
+def export_campaigns():
+ if not authorized(): return redirect('/login')
+ rows=db().execute('SELECT id,platform,caption,link,scheduled_at,status FROM posts ORDER BY id').fetchall()
+ out=io.StringIO()
+ writer=csv.writer(out)
+ writer.writerow(['id','platform','caption','link','scheduled_at','status'])
+ writer.writerows(rows)
+ return Response(out.getvalue(),mimetype='text/csv',headers={'Content-Disposition':'attachment; filename=t2-music-campaigns.csv','Cache-Control':'no-store'})
+
+@app.get('/campaign/calendar')
+def campaign_calendar():
+ if not authorized(): return redirect('/login')
+ rows=db().execute("SELECT platform,caption,link,scheduled_at,status FROM posts WHERE scheduled_at IS NOT NULL AND scheduled_at!='' ORDER BY scheduled_at").fetchall()
+ items=[]
+ for platform,caption,link,scheduled_at,status in rows:
+  try:
+   start=datetime.datetime.fromisoformat(scheduled_at).strftime('%Y%m%dT%H%M%S')
+  except ValueError: continue
+  def escape(value):
+   return str(value).replace('\\','\\\\').replace('\n','\\n').replace(',','\\,').replace(';','\\;')
+  items.extend(['BEGIN:VEVENT','UID:'+secrets.token_hex(12)+'@t2music','DTSTAMP:'+datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ'),'DTSTART:'+start,'SUMMARY:'+escape('T2 Music draft - '+platform),'DESCRIPTION:'+escape(caption+' '+link+' (not auto-published)'),'END:VEVENT'])
+ data='\r\n'.join(['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//T2 Music//Campaign Planner//EN',*items,'END:VCALENDAR'])+'\r\n'
+ return Response(data,mimetype='text/calendar',headers={'Content-Disposition':'attachment; filename=t2-music-schedule.ics','Cache-Control':'no-store'})
+
+@app.post('/campaign/<int:post_id>/delete')
+def delete_campaign(post_id):
+ if not authorized(): return redirect('/login')
+ if request.form.get('csrf')!=session.get('csrf'): abort(403)
+ con=db()
+ con.execute('DELETE FROM posts WHERE id=?',(post_id,))
  con.commit()
  return redirect('/')
